@@ -1,0 +1,3 @@
+This is a simple demo of the MPU-6050 IMU using a Nokia 5110 LCD display and Arduino Uno. The code was heavily borrowed
+from work done by http://www.brokking.net/imu.html. Only modified the code to work with a Nokia 5110 LCD display.
+The code requires the Adafruit PCD8544 and GFX libraries to compile.
