@@ -39,7 +39,6 @@ SCL  -  A5
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
-#include <Adafruit_SSD1306.h>
 
 //// Software SPI (slower updates, more flexible pin options):
 //// pin 13 - Serial clock out (SCLK)
@@ -54,17 +53,18 @@ Adafruit_PCD8544 display = Adafruit_PCD8544(13, 11, 5, 7, 6);
 int gyro_x, gyro_y, gyro_z;
 long acc_x, acc_y, acc_z, acc_total_vector;
 int temperature;
-long gyro_x_cal, gyro_y_cal, gyro_z_cal;
+long gyro_x_cal, gyro_y_cal, gyro_z_cal, tmp_cal;
 long loop_timer, display_timer;
 int lcd_loop_counter;
 float angle_pitch, angle_roll;
-int angle_pitch_buffer, angle_roll_buffer;
+int angle_pitch_buffer, angle_roll_buffer, tmp_buffer;
 boolean set_gyro_angles;
 float angle_roll_acc, angle_pitch_acc;
 float angle_pitch_output, angle_roll_output;
-int fontSizeHeight = 16;
-int fontSizeWidth = 10;
+int fontSizeHeight = 8;
+int fontSizeWidth = 6;
 int dataOffset = 8;
+int calibrationOffset = 13;
 byte shadowPitchValues[4] = {0};
 byte shadowRollValues[4] = {0};
 char shadowPitchSign = '+';
@@ -100,7 +100,7 @@ void setup_nokia_5110_lcd()
   display.clearDisplay();                                              // Clear the screen and buffer
 
   display.setTextSize(1);
-  display.setTextColor(WHITE, BLACK);
+  display.setTextColor(BLACK, WHITE);
   display.setCursor(0,0);                                              //Set the display. cursor to position to position 0,0
   display.print("MPU-6050 IMU");                                       //Print text to screen
   display.setCursor(0,fontSizeHeight);                                 //Set the display. cursor to position to position 0,1
@@ -118,7 +118,7 @@ void calibrate_imu()
   for (int cal_int = 0; cal_int < 2000 ; cal_int ++){                  //Run this code 2000 times
     if(cal_int % 250 == 0)
     { 
-      display.setCursor(0,fontSizeHeight); 
+      display.setCursor(calibrationOffset*fontSizeWidth,0); 
       count--;                                                         //Set count on the display. Every 250 readings
       display.print(count);
       display.display();
@@ -127,11 +127,13 @@ void calibrate_imu()
     gyro_x_cal += gyro_x;                                              //Add the gyro x-axis offset to the gyro_x_cal variable
     gyro_y_cal += gyro_y;                                              //Add the gyro y-axis offset to the gyro_y_cal variable
     gyro_z_cal += gyro_z;                                              //Add the gyro z-axis offset to the gyro_z_cal variable
+    tmp_cal += temperature;                                             //Add the temperature offset to tmp_cal variable
     delay(3);                                                          //Delay 3us to simulate the 250Hz program loop
   }
   gyro_x_cal /= 2000;                                                  //Divide the gyro_x_cal variable by 2000 to get the avarage offset
   gyro_y_cal /= 2000;                                                  //Divide the gyro_y_cal variable by 2000 to get the avarage offset
   gyro_z_cal /= 2000;                                                  //Divide the gyro_z_cal variable by 2000 to get the avarage offset
+  tmp_cal /= 2000;
 }
 
 void prepare_lcd_data()
@@ -141,6 +143,8 @@ void prepare_lcd_data()
   display.print("Pitch:");                                             //Print Pitch text to screen
   display.setCursor(0,fontSizeHeight);                                 //Set the display. cursor to position to position 0,1
   display.print("Roll:");                                              //Print Roll text to screen
+  display.setCursor(0,fontSizeHeight*2);                               //Set the display. cursor to position to position 0,1
+  display.print("Temp:");
   display.display();
   loop_timer = micros();                                               //Reset the loop timer
 }
@@ -171,17 +175,17 @@ void write_display(){                                                  //Subrout
   
   //To get a 250Hz program loop (4us) it's only possible to write one character per loop
   //Writing multiple characters is taking to much time
-  if(lcd_loop_counter == 14)
+  if(lcd_loop_counter == 21)
   {
     display.display();
-    lcd_loop_counter = 0;                                             //Reset the counter after 14 characters
+    lcd_loop_counter = 0;                                             // Reset the counter after 14 characters
   }
   
-  lcd_loop_counter++;                                                 //Increase the counter
+  lcd_loop_counter++;                                                 // Increase the counter
 
   if(lcd_loop_counter == 1){
-    angle_pitch_buffer = angle_pitch_output * 10;                     //Buffer the pitch angle because it will change
-    display.setCursor(fontSizeWidth*dataOffset,0);                    //Set the LCD cursor to position of the data
+    angle_pitch_buffer = angle_pitch_output * 10;        // Buffer the pitch angle because it will change
+    display.setCursor(fontSizeWidth*dataOffset,0);                // Set the position of the cursor to the data position
   }
   
   if(lcd_loop_counter == 2){
@@ -223,7 +227,7 @@ void write_display(){                                                  //Subrout
   }
 
   if(lcd_loop_counter == 8){
-    angle_roll_buffer = angle_roll_output * 10;
+    angle_roll_buffer = angle_roll_output*10;
     display.setCursor(fontSizeWidth*dataOffset,fontSizeHeight);     // Set the position of the cursor to the data position
   }
 
@@ -250,7 +254,7 @@ void write_display(){                                                  //Subrout
     shadowRollValues[1] = (abs(angle_roll_buffer)/100)%10; 
     display.print(shadowRollValues[1]);                             //Print second number
   }
- 
+
   if(lcd_loop_counter == 12)
   {
     shadowRollValues[2] = (abs(angle_roll_buffer)/10)%10; 
@@ -261,11 +265,55 @@ void write_display(){                                                  //Subrout
   {
     display.print(".");                                             //Print decimal point
   }
-  
+
   if(lcd_loop_counter == 14)
   {
     shadowRollValues[3] = abs(angle_roll_buffer)%10; 
     display.print(shadowRollValues[3]);                             //Print fourth number
+  }
+
+  if(lcd_loop_counter == 15){
+    // According to the datasheet:
+    // 340 per degrees Celsius, -512 at 35 degrees.
+    // At 0 degrees: -521 - (340 * 35) = -12421
+    tmp_buffer = (temperature + 12421)/340;                     // Datasheet calculation: divide by 340 and add offset 35
+    display.setCursor(fontSizeWidth*dataOffset,fontSizeHeight*2);     // Set the position of the cursor to the data position
+  }
+
+  if(lcd_loop_counter == 16){
+    if(tmp_buffer < 0)
+    {
+      display.print('-');                                         //Print - if value is negative
+    }
+    else
+    {
+      display.print('+');                                          //Print + if value is negative
+    }
+  }
+
+  if(lcd_loop_counter == 17)
+  {
+    display.print((abs(tmp_buffer)/100)%10);                         //Print first roll number
+  }
+
+  if(lcd_loop_counter == 18)
+  {
+    display.print((abs(tmp_buffer)/10)%10);                          //Print second number
+  }
+
+  if(lcd_loop_counter == 19)
+  {
+    display.print(abs(tmp_buffer)%10);                             //Print second number
+  }
+
+  if(lcd_loop_counter == 20)
+  {
+    display.print(".");                                           //Print decimal point
+  }
+
+  if(lcd_loop_counter == 21)
+  {
+    display.print((abs(tmp_buffer)*10)%10);                       //Print fourth number
   }
 }
 
@@ -276,7 +324,8 @@ void loop(){
   gyro_x -= gyro_x_cal;                                                //Subtract the offset calibration value from the raw gyro_x value
   gyro_y -= gyro_y_cal;                                                //Subtract the offset calibration value from the raw gyro_y value
   gyro_z -= gyro_z_cal;                                                //Subtract the offset calibration value from the raw gyro_z value
-  
+  temperature -= tmp_cal;                                               //Subtract the offset calibration value from the raw temperature value
+
   //Gyro angle calculations
   //0.0000611 = 1 / (250Hz / 65.5)
   angle_pitch += gyro_x * 0.0000611;                                   //Calculate the traveled pitch angle and add this to the angle_pitch variable
